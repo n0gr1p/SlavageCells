@@ -10,6 +10,11 @@ Behavior:
 Multiple Windower clients coordinate over IPC so duplicate cells in the treasure
 pool can be assigned to different characters that still need them.
 
+v0.5.0:
+  Ranks eligible party members by four per-cell main-job priority tiers.
+  Same-tier characters use the original alphabetical tie-breaker.
+  Job metadata rides in IPC snapshots without changing recovery files.
+
 v0.4.0:
   Adds automatic outside-Salvage cleanup.
   If the addon loads/logs in while outside original Salvage, any tracked imbued
@@ -30,7 +35,7 @@ overwrite one another's lot/pass decisions.
 
 _addon.name = 'SalvageCells'
 _addon.author = 'OpenAI'
-_addon.version = '0.4.0'
+_addon.version = '0.5.0'
 _addon.commands = {'salvagecells', 'scells', 'sc'}
 
 local packets = require('packets')
@@ -73,6 +78,127 @@ local ORDER = {
     5373, 5374, 5375, 5376, 5377, 5378, 5379, 5380,
     5381, 5382, 5383, 5384,
 }
+
+-- Stable main-job ranking, independent of character names.
+-- Each cell has three explicit tiers; every unlisted job is tier 4.
+-- There are no tank/healer role overrides or job-specific exclusions.
+local JOB_BY_ID = {[1]='WAR', [2]='MNK', [3]='WHM', [4]='BLM', [5]='RDM', [6]='THF', [7]='PLD', [8]='DRK', [9]='BST', [10]='BRD', [11]='RNG', [12]='SAM', [13]='NIN', [14]='DRG', [15]='SMN', [16]='BLU', [17]='COR', [18]='PUP', [19]='DNC', [20]='SCH', [21]='GEO', [22]='RUN'}
+local VALID_JOBS = {}
+for _, job in pairs(JOB_BY_ID) do VALID_JOBS[job] = true end
+
+local CELL_JOB_TIERS = {
+    weapon = {
+        {'WAR', 'DRK', 'DRG', 'SAM', 'PLD', 'RUN', 'THF', 'NIN', 'BST'},
+        {'COR', 'RNG', 'DNC', 'RDM', 'BLU'},
+        {'WHM', 'SCH', 'BRD', 'BLM', 'GEO', 'SMN', 'PUP', 'MNK'},
+    },
+    head = {
+        {'PLD', 'RUN', 'WAR', 'SAM', 'DRK', 'DRG', 'MNK', 'THF', 'NIN', 'DNC'},
+        {'COR', 'RNG', 'BLU', 'BST', 'PUP'},
+        {'WHM', 'SCH', 'RDM', 'BLM', 'BRD', 'GEO', 'SMN'},
+    },
+    body = {
+        {'PLD', 'RUN', 'WAR', 'SAM', 'DRK', 'DRG', 'MNK', 'THF', 'NIN', 'DNC'},
+        {'COR', 'RNG', 'BLU', 'BST', 'PUP'},
+        {'WHM', 'SCH', 'RDM', 'BLM', 'BRD', 'GEO', 'SMN'},
+    },
+    hands = {
+        {'PLD', 'RUN', 'WAR', 'SAM', 'DRK', 'DRG', 'MNK', 'THF', 'NIN', 'DNC'},
+        {'COR', 'RNG', 'BLU', 'BST', 'PUP'},
+        {'WHM', 'SCH', 'RDM', 'BLM', 'BRD', 'GEO', 'SMN'},
+    },
+    legs = {
+        {'PLD', 'RUN', 'WAR', 'SAM', 'DRK', 'DRG', 'MNK', 'THF', 'NIN', 'DNC'},
+        {'COR', 'RNG', 'BLU', 'BST', 'PUP'},
+        {'WHM', 'SCH', 'RDM', 'BLM', 'BRD', 'GEO', 'SMN'},
+    },
+    back = {
+        {'PLD', 'RUN', 'WAR', 'SAM', 'DRK', 'DRG', 'MNK', 'THF', 'NIN', 'DNC'},
+        {'COR', 'RNG', 'BLU', 'BST', 'PUP'},
+        {'WHM', 'SCH', 'RDM', 'BLM', 'BRD', 'GEO', 'SMN'},
+    },
+    rings = {
+        {'PLD', 'RUN', 'WAR', 'SAM', 'DRK', 'DRG', 'MNK', 'THF', 'NIN', 'DNC'},
+        {'COR', 'RNG', 'BLU', 'BST', 'PUP'},
+        {'WHM', 'SCH', 'RDM', 'BLM', 'BRD', 'GEO', 'SMN'},
+    },
+    ranged = {
+        {'BRD', 'GEO', 'RNG', 'COR'},
+        {'PUP', 'NIN', 'THF'},
+        {'DNC', 'WAR', 'SAM', 'DRG'},
+    },
+    subjob = {
+        {'PLD', 'RUN', 'WHM', 'SCH', 'RDM'},
+        {'WAR', 'SAM', 'MNK', 'DRK', 'DRG', 'BLM', 'BRD', 'GEO', 'SMN'},
+        {'COR', 'RNG', 'THF', 'NIN', 'DNC', 'BLU', 'BST', 'PUP'},
+    },
+    abilities = {
+        {'SAM', 'WAR', 'DRK', 'DRG', 'MNK', 'COR', 'PUP', 'RNG'},
+        {'PLD', 'RUN', 'THF', 'DNC', 'NIN', 'BST', 'BLU', 'BRD'},
+        {'WHM', 'SCH', 'RDM', 'GEO', 'BLM', 'SMN'},
+    },
+    magic = {
+        {'WHM', 'SCH', 'RDM', 'BLM'},
+        {'BRD', 'GEO', 'SMN', 'BLU', 'PLD', 'RUN'},
+        {'NIN', 'DRK'},
+    },
+    str = {
+        {'SAM', 'WAR', 'DRK', 'DRG', 'MNK'},
+        {'THF', 'NIN', 'DNC', 'RNG', 'COR', 'PLD', 'RUN', 'BLU'},
+        {'BST', 'PUP'},
+    },
+    dex = {
+        {'THF', 'RNG', 'NIN', 'DNC', 'MNK', 'SAM', 'WAR', 'DRG', 'DRK', 'COR'},
+        {'PLD', 'RUN', 'BLU', 'BST', 'PUP'},
+        {'RDM', 'BRD', 'GEO'},
+    },
+    vit = {
+        {'PLD', 'RUN'},
+        {'WAR', 'MNK', 'SAM', 'DRK', 'DRG'},
+        {'DNC', 'NIN', 'THF', 'BLU', 'BST', 'PUP', 'COR', 'RNG'},
+    },
+    agi = {
+        {'THF', 'RNG', 'NIN', 'COR'},
+        {'DNC', 'SAM', 'WAR', 'DRG', 'MNK'},
+        {'PLD', 'RUN', 'DRK', 'BLU', 'BST', 'PUP'},
+    },
+    int = {
+        {'BLM', 'SCH', 'RDM'},
+        {'GEO', 'SMN', 'BLU', 'DRK'},
+        {'WHM', 'BRD', 'NIN'},
+    },
+    mnd = {
+        {'WHM', 'SCH', 'RDM'},
+        {'GEO', 'PLD', 'BRD', 'SMN'},
+        {'RUN', 'BLM', 'BLU'},
+    },
+    chr = {
+        {'BRD', 'COR', 'BST'},
+        {'DNC', 'GEO'},
+        {'WHM', 'SCH', 'RDM'},
+    },
+    hp = {
+        {'PLD', 'RUN'},
+        {'WAR', 'SAM', 'DRK', 'DRG', 'MNK', 'THF'},
+        {'NIN', 'DNC', 'PUP', 'BST', 'RNG', 'COR', 'BLU'},
+    },
+    mp = {
+        {'WHM', 'SCH', 'RDM', 'BLM'},
+        {'GEO', 'SMN', 'PLD', 'RUN', 'BRD', 'BLU'},
+        {'DRK', 'NIN'},
+    },
+}
+
+local CELL_JOB_RANK = {}
+for item_id, cell in pairs(CELLS) do
+    local ranks = {}
+    for tier, jobs in ipairs(CELL_JOB_TIERS[cell.alias] or {}) do
+        for _, job in ipairs(jobs) do
+            ranks[job] = tier
+        end
+    end
+    CELL_JOB_RANK[item_id] = ranks
+end
 
 local STATE_NEED  = 'n'
 local STATE_OWNED = 'o'
@@ -134,6 +260,18 @@ end
 local function player_name()
     local p = player()
     return p and p.name or nil
+end
+
+local function current_main_job()
+    local p = player()
+    if not p then return nil end
+
+    local raw = p.main_job
+    if type(raw) == 'string' then
+        local job = raw:upper()
+        if VALID_JOBS[job] then return job end
+    end
+    return JOB_BY_ID[tonumber(raw)] or JOB_BY_ID[tonumber(p.main_job_id)]
 end
 
 local function current_zone()
@@ -353,6 +491,7 @@ local function update_self_peer()
 
     peers[me] = peers[me] or {}
     peers[me].zone = current_zone()
+    peers[me].job = current_main_job()
     peers[me].states = {}
 
     for id, state in pairs(local_state) do
@@ -369,8 +508,11 @@ local function broadcast_snapshot()
     local zone = current_zone()
     if not me or not zone then return end
 
+    -- Appended metadata is ignored by older clients' cell-state parsers.
+    -- The persisted state format stays unchanged.
+    local payload = serialize_state() .. ',job:' .. (current_main_job() or 'UNK')
     windower.send_ipc_message(
-        ('SCELL|SNAP|%s|%d|%s'):format(me, zone, serialize_state())
+        ('SCELL|SNAP|%s|%d|%s'):format(me, zone, payload)
     )
     last_snapshot = now_clock()
 end
@@ -612,10 +754,17 @@ local function candidates_for(item_id)
         end
     end
 
-    -- v0.3 intentionally preserves the proven v0.2 deterministic allocation.
-    -- Round-robin can be changed independently later without mixing it into the
-    -- DC-recovery patch.
-    table.sort(names)
+    -- All clients rank the same eligible peers using the cell and main job.
+    -- Alphabetical ordering remains the stable tiebreaker within a tier.
+    local ranks = CELL_JOB_RANK[item_id] or {}
+    table.sort(names, function(a, b)
+        local a_job = peers[a] and peers[a].job
+        local b_job = peers[b] and peers[b].job
+        local a_rank = ranks[a_job] or 4
+        local b_rank = ranks[b_job] or 4
+        if a_rank ~= b_rank then return a_rank < b_rank end
+        return a < b
+    end)
     return names
 end
 
@@ -754,6 +903,27 @@ local function resolve_cell(text)
     return nil
 end
 
+local function print_priority_order(text)
+    local item_id = resolve_cell(text)
+    if not item_id then
+        chat(('Unknown cell "%s". Use //sc help for aliases.'):format(text), 123)
+        return
+    end
+
+    local candidates = candidates_for(item_id)
+    chat(('%s lot order (NEED only):'):format(CELLS[item_id].name))
+    if #candidates == 0 then
+        chat('No currently known eligible characters.')
+        return
+    end
+
+    local ranks = CELL_JOB_RANK[item_id] or {}
+    for i, name in ipairs(candidates) do
+        local job = peers[name] and peers[name].job or nil
+        chat(('%d. %s (%s, tier %d)'):format(i, name, job or 'unknown', ranks[job] or 4))
+    end
+end
+
 local function print_status()
     local need, owned, done, skip = {}, {}, {}, {}
 
@@ -793,6 +963,7 @@ end
 
 local function print_help()
     chat('//sc status                  - show this character\'s run state')
+    chat('//sc priority <cell>         - show eligible lot order and job tiers')
     chat('//sc reset                   - reset all configured cells to NEED')
     chat('//sc need <alias/name/id>    - mark one cell NEED again')
     chat('//sc done <alias/name/id>    - manually mark one cell DONE')
@@ -821,6 +992,8 @@ windower.register_event('ipc message', function(msg)
     peers[name] = peers[name] or {}
     peers[name].zone = zone
     peers[name].states = parse_state_string(payload)
+    local job = payload:match(',job:([A-Z]+)$')
+    peers[name].job = job and VALID_JOBS[job] and job or nil
     peers[name].last_seen = os.time()
 end)
 
@@ -932,6 +1105,9 @@ windower.register_event('addon command', function(command, ...)
 
     if command == 'status' then
         print_status()
+
+    elseif command == 'priority' then
+        print_priority_order(text)
 
     elseif command == 'reset' then
         reset_local_state()

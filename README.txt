@@ -1,9 +1,40 @@
-SalvageCells 0.4.0
+SalvageCells 0.5.0
 ===================
 
 Purpose
 -------
 Automates original level-75 Salvage imbued-cell distribution for a multibox party.
+
+New in 0.5.0: per-cell job priority
+------------------------------------
+Characters that still NEED a cell are ranked by their current main job and
+the type of cell in the treasure pool. There are four priority tiers per cell:
+three explicit tiers in CELL_JOB_TIERS (inside SalvageCells.lua), with all
+unlisted jobs in tier 4. Characters in the same tier are sorted alphabetically,
+so allocation remains deterministic across Windower clients.
+
+Examples:
+- Magic: WHM/SCH/RDM/BLM rank ahead of WAR/SAM.
+- Abilities / WS: SAM/WAR/DRK/DRG/MNK/COR/PUP/RNG rank ahead of WHM.
+- Ranged / ammo: BRD/GEO/RNG/COR rank ahead of jobs that rarely use it.
+- Maximum HP: PLD/RUN rank first.
+
+Every job remains eligible for every cell: no automatic SKIP states, no
+character-name hardcoding, no tank/healer overrides. The existing NEED,
+OWNED, DONE and SKIP semantics and duplicate-slot allocation remain unchanged.
+
+Main-job metadata travels with the existing IPC snapshots as an optional
+comma-separated field; legacy state parsers ignore it. Disk recovery data
+remains unchanged. Unknown job information falls into tier 4.
+
+  //sc priority magic
+  //sc priority abilities
+
+These read-only commands show the currently known eligible characters
+in their calculated lot order, including their jobs and tiers.
+
+For consistent allocations, update/reload all SalvageCells clients to 0.5.0
+before entering Salvage. Mixed old and new versions can disagree on lot order.
 
 State machine
 -------------
@@ -76,15 +107,14 @@ Multibox behavior
 -----------------
 All clients exchange state over Windower IPC.
 
-v0.3.0 intentionally keeps the proven v0.2 allocation order unchanged:
-characters still needing a cell are sorted alphabetically.
-
-That means this build ONLY changes DC/reload persistence. It does not mix a new
-round-robin allocator into the recovery patch.
+v0.3.0 originally preserved the v0.2 alphabetical allocation order.
+v0.5.0 replaces only the candidate sort with per-cell job priorities; the
+underlying recovery and lot/pass state machines are unchanged.
 
 Commands
 --------
     //sc status
+    //sc priority <cell>
     //sc reset
     //sc need <alias/name/id>
     //sc done <alias/name/id>
